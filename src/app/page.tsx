@@ -1,42 +1,173 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+function getOrCreateUserId() {
+  const key = "ddb_user_id";
+  const existing = localStorage.getItem(key);
+  if (existing) return existing;
+
+  // simple uuid-ish id (good enough for v1)
+  const id = crypto.randomUUID();
+  localStorage.setItem(key, id);
+  return id;
+}
 
 export default function Home() {
-  const [data, setData] = useState<any>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE;
 
-  useEffect(() => {
-    const base = process.env.NEXT_PUBLIC_API_BASE;
-    if (!base) {
-      setErr("Missing NEXT_PUBLIC_API_BASE in .env.local");
-      return;
-    }
-
-    fetch(`${base}/recommend`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setData)
-      .catch((e) => setErr(String(e)));
+  const userId = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return getOrCreateUserId();
   }, []);
 
-  return (
-    <main className="min-h-screen p-6">
-      <h1 className="text-2xl font-semibold">DoorDash Bot</h1>
-      <p className="mt-2 text-sm text-neutral-600">
-        Testing frontend ↔ worker API
-      </p>
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-      <div className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
-        {!data && !err && <p>Loading recommendation…</p>}
-        {err && <p className="text-red-600">Error: {err}</p>}
-        {data && (
-          <pre className="text-sm overflow-auto whitespace-pre-wrap">
-            {JSON.stringify(data, null, 2)}
-          </pre>
-        )}
+  const [cuisine, setCuisine] = useState("thai");
+  const [maxEta, setMaxEta] = useState(45);
+  const [budgetCents, setBudgetCents] = useState(3000);
+
+  async function loadMe() {
+    if (!apiBase) {
+      setErr("Missing NEXT_PUBLIC_API_BASE");
+      setLoading(false);
+      return;
+    }
+    setErr(null);
+    setLoading(true);
+    try {
+      const r = await fetch(`${apiBase}/me`, {
+        headers: { "x-user-id": userId },
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+
+      const p = j.preferences;
+      if (p) {
+        setCuisine(p.cuisine);
+        setMaxEta(p.max_eta_minutes);
+        setBudgetCents(p.budget_max_cents);
+      }
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function savePreferences() {
+    if (!apiBase) return;
+    setErr(null);
+    setSaving(true);
+    try {
+      const r = await fetch(`${apiBase}/preferences`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-user-id": userId,
+        },
+        body: JSON.stringify({
+          cuisine,
+          max_eta_minutes: maxEta,
+          budget_max_cents: budgetCents,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      await loadMe();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!userId) return;
+    loadMe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const budgetDollars = Math.round(budgetCents / 100);
+
+  return (
+    <main className="min-h-screen bg-neutral-50 p-5">
+      <div className="mx-auto max-w-md">
+        <h1 className="text-2xl font-semibold tracking-tight">DoorDash Bot</h1>
+        <p className="mt-1 text-sm text-neutral-600">
+          Preferences (v1) — stored in D1
+        </p>
+
+        <div className="mt-5 rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="text-xs text-neutral-500">
+            User ID (device):{" "}
+            <span className="font-mono">{userId.slice(0, 8)}…</span>
+          </div>
+
+          {loading ? (
+            <div className="mt-4 text-sm text-neutral-700">Loading…</div>
+          ) : (
+            <>
+              {err && (
+                <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                  {err}
+                </div>
+              )}
+
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className="text-sm font-medium">Cuisine</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-base outline-none focus:ring-2 focus:ring-neutral-200"
+                    value={cuisine}
+                    onChange={(e) => setCuisine(e.target.value)}
+                    placeholder="thai, indian, mexican…"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium">
+                    Max ETA (minutes)
+                  </label>
+                  <input
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-base outline-none focus:ring-2 focus:ring-neutral-200"
+                    type="number"
+                    value={maxEta}
+                    onChange={(e) => setMaxEta(Number(e.target.value))}
+                    min={10}
+                    max={180}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium">
+                    Budget max (approx) — ${budgetDollars}
+                  </label>
+                  <input
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-base outline-none focus:ring-2 focus:ring-neutral-200"
+                    type="number"
+                    value={budgetDollars}
+                    onChange={(e) =>
+                      setBudgetCents(Math.max(0, Number(e.target.value)) * 100)
+                    }
+                    min={5}
+                    max={500}
+                  />
+                </div>
+
+                <button
+                  onClick={savePreferences}
+                  disabled={saving}
+                  className="w-full rounded-xl bg-neutral-900 px-4 py-3 text-base font-medium text-white shadow-sm active:scale-[0.99] disabled:opacity-60"
+                >
+                  {saving ? "Saving…" : "Save preferences"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </main>
   );
