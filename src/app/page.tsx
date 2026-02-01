@@ -14,6 +14,7 @@ function getOrCreateUserId() {
 type Recommendation = {
   recommended: {
     restaurant: string;
+    doordash_url: string;
     items: string[];
     eta_minutes: number;
     estimated_total_usd: number;
@@ -242,7 +243,14 @@ export default function Home() {
 
             <button
               className="mt-4 w-full rounded-xl bg-neutral-900 px-4 py-3 text-base font-medium text-white shadow-sm active:scale-[0.99]"
-              onClick={() => alert("Deep link to DoorDash comes in Step 5")}
+              onClick={() => {
+                const url = reco.recommended.doordash_url;
+                if (!url) {
+                  alert("Missing DoorDash URL for this recommendation.");
+                  return;
+                }
+                window.location.href = url;
+              }}
             >
               Order via DoorDash
             </button>
